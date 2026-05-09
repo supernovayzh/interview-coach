@@ -1,6 +1,7 @@
 package com.example.interviewcoach.service;
 
 import com.example.interviewcoach.config.LlmOpenAiProperties;
+import com.example.interviewcoach.model.ChatAnswer;
 import com.example.interviewcoach.model.ChatRequest;
 import com.example.interviewcoach.model.ConversationStage;
 import com.example.interviewcoach.model.RagChunk;
@@ -18,21 +19,23 @@ public class LLMService implements ChatService {
     private final LlmOpenAiProperties properties;
     private final InterviewMemoryService memoryService;
     private final RagKnowledgeService ragKnowledgeService;
+    private final AnswerScoringService scoringService;
 
     public LLMService(LlmOpenAiProperties properties,
                       WebClient.Builder webClientBuilder,
                       InterviewMemoryService memoryService,
-                      RagKnowledgeService ragKnowledgeService) {
+                      RagKnowledgeService ragKnowledgeService,
+                      AnswerScoringService scoringService) {
         this.properties = properties;
         this.memoryService = memoryService;
         this.ragKnowledgeService = ragKnowledgeService;
+        this.scoringService = scoringService;
         this.webClient = webClientBuilder.baseUrl(properties.getEndpoint()).build();
     }
 
-    @SuppressWarnings("unchecked")
-    public String ask(ChatRequest request) {
+    public ChatAnswer ask(ChatRequest request) {
         if (request == null || request.getQuestion() == null || request.getQuestion().isBlank()) {
-            return "请先提供一个明确的问题。";
+            return new ChatAnswer("请先提供一个明确的问题。", 0.0, "no question provided");
         }
 
         String sessionId = request.getEffectiveSessionId();
@@ -44,15 +47,16 @@ public class LLMService implements ChatService {
         }
 
         if (!memoryService.getOrCreate(sessionId).hasEnoughProfile()) {
-            return buildIntakePrompt(
-                    memoryService.buildMissingFields(sessionId),
-                    memoryService.buildContext(sessionId),
-                    stage
+            String intake = buildIntakePrompt(
+                memoryService.buildMissingFields(sessionId),
+                memoryService.buildContext(sessionId),
+                stage
             );
+            return new ChatAnswer(intake, 0.0, "collecting profile");
         }
 
         if (properties.getApiKey() == null || properties.getApiKey().isBlank()) {
-            return "[LLM disabled] API key not configured. Question: " + request.getQuestion();
+            return new ChatAnswer("[LLM disabled] API key not configured. Question: " + request.getQuestion(), 0.0, "apiKey missing");
         }
 
         String ragContext = buildRagContext(request, sessionId);
@@ -67,7 +71,7 @@ public class LLMService implements ChatService {
         );
 
         try {
-            Map<String, Object> resp = webClient.post()
+                Map<String, Object> resp = webClient.post()
                     .contentType(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + properties.getApiKey())
                     .bodyValue(body)
@@ -75,7 +79,7 @@ public class LLMService implements ChatService {
                     .bodyToMono(Map.class)
                     .block();
 
-            if (resp == null) return "[LLM error] empty response";
+            if (resp == null) return new ChatAnswer("[LLM error] empty response", 0.0, "empty response");
 
             Object choicesObj = resp.get("choices");
             if (choicesObj instanceof List) {
@@ -87,18 +91,28 @@ public class LLMService implements ChatService {
                         Object message = m.get("message");
                         if (message instanceof Map) {
                             Object content = ((Map) message).get("content");
-                            if (content != null) {
-                                String answer = content.toString();
-                                memoryService.addTurn(sessionId, request.getQuestion(), answer);
-                                return answer;
-                            }
+                                if (content != null) {
+                                    String answer = content.toString();
+                                    memoryService.addTurn(sessionId, request.getQuestion(), answer);
+                                    // score the answer
+                                    double score = 0.0;
+                                    String feedback = "";
+                                    try {
+                                        var result = scoringService.score(request.getQuestion(), answer, ragContext);
+                                        score = result.getScore();
+                                        feedback = result.getFeedback();
+                                    } catch (Exception ex) {
+                                        feedback = "scoring failed: " + ex.getMessage();
+                                    }
+                                    return new ChatAnswer(answer, score, feedback);
+                                }
                         }
                     }
                 }
             }
-            return "[LLM error] no choice found";
+            return new ChatAnswer("[LLM error] no choice found", 0.0, "no choice");
         } catch (Exception e) {
-            return "[LLM error] " + e.getMessage();
+            return new ChatAnswer("[LLM error] " + e.getMessage(), 0.0, "exception");
         }
     }
 

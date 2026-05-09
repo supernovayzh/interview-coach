@@ -5,6 +5,8 @@ public class ChatResponse {
     private String sessionId;
     private ConversationStage stage;
     private String missingFields;
+    private double score;
+    private String scoreFeedback;
 
     public ChatResponse() {}
 
@@ -17,6 +19,22 @@ public class ChatResponse {
         this.sessionId = sessionId;
         this.stage = stage;
         this.missingFields = missingFields;
+    }
+
+    public double getScore() {
+        return score;
+    }
+
+    public void setScore(double score) {
+        this.score = score;
+    }
+
+    public String getScoreFeedback() {
+        return scoreFeedback;
+    }
+
+    public void setScoreFeedback(String scoreFeedback) {
+        this.scoreFeedback = scoreFeedback;
     }
 
     public String getAnswer() {

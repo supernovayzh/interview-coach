@@ -1,3 +1,5 @@
 # Ignore secrets containing API keys
 secrets.yml
 target/
+# Project-local todo (do not commit)
+TODO.md

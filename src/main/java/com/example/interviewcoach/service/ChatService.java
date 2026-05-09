@@ -1,7 +1,8 @@
 package com.example.interviewcoach.service;
 
+import com.example.interviewcoach.model.ChatAnswer;
 import com.example.interviewcoach.model.ChatRequest;
 
 public interface ChatService {
-    String ask(ChatRequest request);
+    ChatAnswer ask(ChatRequest request);
 }

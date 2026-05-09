@@ -2,6 +2,7 @@ package com.example.interviewcoach.controller;
 
 import com.example.interviewcoach.model.ChatRequest;
 import com.example.interviewcoach.model.ChatResponse;
+import com.example.interviewcoach.model.ChatAnswer;
 import com.example.interviewcoach.model.ConversationStage;
 import com.example.interviewcoach.model.InterviewSessionMemory;
 import com.example.interviewcoach.service.ChatService;
@@ -31,10 +32,16 @@ public class ChatController {
             return ResponseEntity.badRequest().body("question required");
         }
         String sessionId = req.getEffectiveSessionId();
-        String answer = chatService.ask(req);
+        ChatAnswer answerObj = chatService.ask(req);
+        String answer = answerObj == null ? null : answerObj.getAnswer();
         InterviewSessionMemory memory = memoryService.getOrCreate(sessionId);
         ConversationStage stage = memory.getStage();
         String missingFields = memory.hasEnoughProfile() ? null : memory.getProfile().missingFields();
-        return ResponseEntity.ok(new ChatResponse(answer, sessionId, stage, missingFields));
+        ChatResponse resp = new ChatResponse(answer, sessionId, stage, missingFields);
+        if (answerObj != null) {
+            resp.setScore(answerObj.getScore());
+            resp.setScoreFeedback(answerObj.getScoreFeedback());
+        }
+        return ResponseEntity.ok(resp);
     }
 }
