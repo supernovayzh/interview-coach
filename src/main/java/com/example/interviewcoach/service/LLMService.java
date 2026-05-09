@@ -3,6 +3,7 @@ package com.example.interviewcoach.service;
 import com.example.interviewcoach.config.LlmOpenAiProperties;
 import com.example.interviewcoach.model.ChatRequest;
 import com.example.interviewcoach.model.ConversationStage;
+import com.example.interviewcoach.model.RagChunk;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -16,12 +17,15 @@ public class LLMService implements ChatService {
     private final WebClient webClient;
     private final LlmOpenAiProperties properties;
     private final InterviewMemoryService memoryService;
+    private final RagKnowledgeService ragKnowledgeService;
 
     public LLMService(LlmOpenAiProperties properties,
                       WebClient.Builder webClientBuilder,
-                      InterviewMemoryService memoryService) {
+                      InterviewMemoryService memoryService,
+                      RagKnowledgeService ragKnowledgeService) {
         this.properties = properties;
         this.memoryService = memoryService;
+        this.ragKnowledgeService = ragKnowledgeService;
         this.webClient = webClientBuilder.baseUrl(properties.getEndpoint()).build();
     }
 
@@ -51,11 +55,13 @@ public class LLMService implements ChatService {
             return "[LLM disabled] API key not configured. Question: " + request.getQuestion();
         }
 
+        String ragContext = buildRagContext(request, sessionId);
+
         Map<String, Object> body = Map.of(
                 "model", properties.getModel(),
                 "messages", List.of(
                     Map.of("role", "system", "content", buildSystemPrompt(stage)),
-                        Map.of("role", "user", "content", buildUserPrompt(request, memoryService.buildContext(sessionId)))
+                        Map.of("role", "user", "content", buildUserPrompt(request, memoryService.buildContext(sessionId), ragContext))
                 ),
                 "max_tokens", properties.getMaxTokens()
         );
@@ -96,11 +102,14 @@ public class LLMService implements ChatService {
         }
     }
 
-    private String buildUserPrompt(ChatRequest request, String memoryContext) {
+    private String buildUserPrompt(ChatRequest request, String memoryContext, String ragContext) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("请扮演Java后端面试陪练，根据以下画像进行回答和追问。\n");
         if (memoryContext != null && !memoryContext.isBlank()) {
             prompt.append(memoryContext).append('\n');
+        }
+        if (ragContext != null && !ragContext.isBlank()) {
+            prompt.append("本地八股/面经检索资料：\n").append(ragContext).append('\n');
         }
         appendIfNotBlank(prompt, "本轮补充目标公司", request.getTargetCompany());
         appendIfNotBlank(prompt, "本轮补充公司类型/规模", request.getCompanyTier());
@@ -110,6 +119,42 @@ public class LLMService implements ChatService {
         appendIfNotBlank(prompt, "本轮补充当前目标", request.getInterviewGoal());
         prompt.append("用户当前问题：").append(request.getQuestion());
         return prompt.toString();
+    }
+
+    private String buildRagContext(ChatRequest request, String memoryContext) {
+        if (ragKnowledgeService == null) {
+            return "";
+        }
+        StringBuilder query = new StringBuilder();
+        query.append(request.getQuestion()).append(' ');
+        appendQueryIfNotBlank(query, request.getTargetCompany());
+        appendQueryIfNotBlank(query, request.getCompanyTier());
+        appendQueryIfNotBlank(query, request.getTargetRole());
+        appendQueryIfNotBlank(query, request.getFocusAreas());
+        appendQueryIfNotBlank(query, request.getInterviewGoal());
+        if (memoryContext != null && !memoryContext.isBlank()) {
+            query.append(memoryContext);
+        }
+        List<RagChunk> results = ragKnowledgeService.search(query.toString(), 3);
+        if (results.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < results.size(); i++) {
+            RagChunk chunk = results.get(i);
+            builder.append("【").append(i + 1).append("】");
+            builder.append(chunk.getTitle() == null ? "未命名" : chunk.getTitle());
+            builder.append(" (来源: ").append(chunk.getSourceFile()).append(", 分数: ")
+                    .append(String.format(java.util.Locale.ROOT, "%.2f", chunk.getScore())).append(")\n");
+            builder.append(chunk.preview(650)).append("\n");
+        }
+        return builder.toString();
+    }
+
+    private void appendQueryIfNotBlank(StringBuilder builder, String value) {
+        if (value != null && !value.isBlank()) {
+            builder.append(value).append(' ');
+        }
     }
 
     private String buildSystemPrompt(ConversationStage stage) {

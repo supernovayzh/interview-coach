@@ -16,3 +16,10 @@ llm:
     endpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     max-tokens: 512
     system-prompt: "你是一个专业的Java后端面试陪练。你要先根据用户画像判断面试场景，再给出符合公司层级和考察重点的回答。回答风格要简洁、专业、结构化，优先给出可落地的工程实践建议。"
+
+rag:
+  enabled: true
+  knowledge-path: "D:/vscode笔记/.vscode/找工作"
+  top-k: 3
+  chunk-size: 1200
+  min-score: 1
