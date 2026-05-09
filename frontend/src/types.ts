@@ -27,6 +27,6 @@ export type InterviewProfile = {
   companyTier: string;
   targetRole: string;
   focusAreas: string;
-  resumeSummary: string;
+  resumeSummary?: string;
   interviewGoal: string;
 };

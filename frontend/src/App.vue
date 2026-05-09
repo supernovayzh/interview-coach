@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
 import {
-  askChat,
+  askChatStream,
   buildRequest,
   createSessionId,
   loadAppState,
   saveAppState,
+  uploadResume,
   type AppState
 } from './api/chat';
 import type { ChatMessage } from './types';
@@ -13,6 +16,9 @@ import type { ChatMessage } from './types';
 const appState = ref<AppState>(loadAppState());
 const input = ref('');
 const isSending = ref(false);
+const isAiTyping = ref(false);
+const isStreaming = ref(false);
+const currentAiResponse = ref('');
 const error = ref('');
 const scrollAnchor = ref<HTMLElement | null>(null);
 const stageText = computed(() => {
@@ -25,14 +31,57 @@ const stageText = computed(() => {
   return map[appState.value.stage];
 });
 
+marked.setOptions({
+  breaks: true,
+  gfm: true
+});
+
+function renderMarkdown(content: string) {
+  const html = marked.parse(content ?? '', { async: false }) as string;
+  return DOMPurify.sanitize(html);
+}
+
 const messages = ref<ChatMessage[]>([
   {
     id: 'welcome',
     role: 'assistant',
     content:
-      '我是你的 Java 面试陪练。先告诉我你的目标公司、岗位、重点方向和简历，我会先收集画像，再进入正式陪练。'
+      '我是你的 Java 面试陪练。目标公司、岗位、重点方向和简历都可以给我，没填也没关系，我会尽量按你给的信息来模拟。'
   }
 ]);
+
+const selectedFile = ref<File | null>(null);
+const uploadStatus = ref('');
+
+function onResumeFileChange(e: Event) {
+  const t = e.target as HTMLInputElement;
+  if (t.files && t.files.length > 0) {
+    selectedFile.value = t.files[0];
+  } else {
+    selectedFile.value = null;
+  }
+}
+
+async function uploadResumeFile() {
+  if (!selectedFile.value) return;
+  uploadStatus.value = '上传中...';
+  try {
+    const sid = appState.value.sessionId;
+    const result = await uploadResume(sid, selectedFile.value);
+    uploadStatus.value = result.resumeSummary ? '解析成功' : '解析完成，无文本';
+    try {
+      const raw = localStorage.getItem('interview-coach-web-state');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        parsed.profile = parsed.profile || {};
+        parsed.profile.resumeSummary = result.resumeSummary || '';
+        localStorage.setItem('interview-coach-web-state', JSON.stringify(parsed));
+      }
+    } catch {}
+  } catch (err) {
+    uploadStatus.value = err instanceof Error ? err.message : '上传失败';
+  }
+}
 
 const quickPrompts = [
   '我想练 Java 后端面试',
@@ -46,7 +95,6 @@ const profileFields = [
   { key: 'companyTier', label: '公司层级', placeholder: '例如：大厂 / 中厂 / 小厂' },
   { key: 'targetRole', label: '目标岗位', placeholder: '例如：Java后端实习 / 校招' },
   { key: 'focusAreas', label: '重点方向', placeholder: '例如：Redis / MySQL / 网络 / JVM' },
-  { key: 'resumeSummary', label: '简历摘要', placeholder: '简要说明项目、实习、学校背景' },
   { key: 'interviewGoal', label: '本次目标', placeholder: '例如：模拟面试 / 查漏补缺 / 复盘简历' }
 ] as const;
 
@@ -59,6 +107,12 @@ function updateProfile<K extends keyof AppState['profile']>(key: K, value: strin
   persist();
 }
 
+function patchMessageContent(messageId: string, content: string) {
+  messages.value = messages.value.map((message) =>
+    message.id === messageId ? { ...message, content } : message
+  );
+}
+
 function resetSession() {
   appState.value = {
     sessionId: createSessionId(),
@@ -66,9 +120,8 @@ function resetSession() {
       targetCompany: '',
       companyTier: '',
       targetRole: '',
-      focusAreas: '',
-      resumeSummary: '',
-      interviewGoal: ''
+        focusAreas: '',
+        interviewGoal: ''
     },
     stage: 'INIT'
   };
@@ -92,17 +145,33 @@ async function sendQuestion(rawQuestion: string) {
     role: 'user',
     content: question
   });
+  const assistantMessage: ChatMessage = {
+    id: `${Date.now()}-assistant`,
+    role: 'assistant',
+    content: ''
+  };
+  messages.value.push(assistantMessage);
   input.value = '';
   isSending.value = true;
+  isAiTyping.value = true;
+  isStreaming.value = true;
+  currentAiResponse.value = '';
   error.value = '';
 
   try {
-    const response = await askChat(buildRequest(question, appState.value));
-    messages.value.push({
-      id: `${Date.now()}-assistant`,
-      role: 'assistant',
-      content: response.answer
-    });
+    const response = await askChatStream(
+      buildRequest(question, appState.value),
+      (chunk) => {
+        currentAiResponse.value += chunk;
+        patchMessageContent(assistantMessage.id, currentAiResponse.value);
+        scrollToBottom();
+      },
+      {
+        onClose: () => {
+          isStreaming.value = false;
+        }
+      }
+    );
     if (response.stage) {
       appState.value.stage = response.stage;
     }
@@ -111,8 +180,14 @@ async function sendQuestion(rawQuestion: string) {
     }
     persist();
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '请求失败';
+    if (!currentAiResponse.value.trim()) {
+      messages.value = messages.value.filter((message) => message.id !== assistantMessage.id);
+      error.value = err instanceof Error ? err.message : '请求失败';
+    }
   } finally {
+    isStreaming.value = false;
+    isAiTyping.value = false;
+    currentAiResponse.value = '';
     isSending.value = false;
   }
 }
@@ -156,6 +231,18 @@ onMounted(() => {
 
       <section class="sidebar-card">
         <div class="card-title-row">
+          <h2>提示</h2>
+          <span class="muted">Flow</span>
+        </div>
+        <ul class="tips">
+          <li>画像是参考项，先填哪个都行，不填也能继续聊。</li>
+          <li>如果你愿意，可以把简历 PDF 上传给我，我会尽量提取信息。</li>
+          <li>如果你只想专项训练某块知识，可以在重点方向里写 Redis / 网络 / JVM 等。</li>
+        </ul>
+      </section>
+
+      <section class="sidebar-card">
+        <div class="card-title-row">
           <h2>快速提问</h2>
           <span class="muted">Quick Start</span>
         </div>
@@ -192,10 +279,14 @@ onMounted(() => {
             :class="message.role"
           >
             <div class="message-badge">{{ message.role === 'user' ? '你' : '陪练' }}</div>
-            <div class="message-bubble">
-              <p>{{ message.content }}</p>
-            </div>
+            <div class="message-bubble markdown-body" v-html="renderMarkdown(message.content)"></div>
           </article>
+          <div v-if="isAiTyping" class="typing-indicator" :class="{ streaming: isStreaming }">
+            <span>AI 正在输入</span>
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <span class="dot"></span>
+          </div>
           <div ref="scrollAnchor"></div>
         </div>
 
@@ -223,7 +314,7 @@ onMounted(() => {
           <h2>面试画像</h2>
           <span class="muted">Profile</span>
         </div>
-        <p class="muted compact">填全以后，agent 会切到正式陪练阶段。</p>
+        <p class="muted compact">这些信息只是参考项，填了更贴合，不填也不影响继续面试。</p>
 
         <div class="field-grid">
           <label v-for="field in profileFields" :key="field.key" class="field-item">
@@ -235,18 +326,13 @@ onMounted(() => {
             />
           </label>
         </div>
-      </section>
 
-      <section class="sidebar-card">
-        <div class="card-title-row">
-          <h2>提示</h2>
-          <span class="muted">Flow</span>
+        <div style="margin-top:12px">
+          <label class="muted">上传 PDF 简历（AI 将读取并填入画像）</label>
+          <input type="file" accept="application/pdf" @change="onResumeFileChange" />
+          <button class="ghost-btn" @click="uploadResumeFile" :disabled="!selectedFile">上传并解析</button>
+          <p v-if="uploadStatus" class="muted compact">{{ uploadStatus }}</p>
         </div>
-        <ul class="tips">
-          <li>先输入目标公司、岗位、重点方向。</li>
-          <li>把你的简历摘要贴进来，agent 会根据简历追问。</li>
-          <li>如果你只想专项训练某块知识，可以在重点方向里写 Redis / 网络 / JVM 等。</li>
-        </ul>
       </section>
     </aside>
   </div>

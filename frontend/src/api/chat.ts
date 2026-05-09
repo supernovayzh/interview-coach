@@ -8,6 +8,12 @@ export type AppState = {
   stage: 'INIT' | 'COLLECTING_PROFILE' | 'READY' | 'INTERVIEWING';
 };
 
+export type StreamLifecycleHandlers = {
+  onOpen?: () => void;
+  onClose?: () => void;
+  onError?: (error: Error) => void;
+};
+
 export function createSessionId() {
   return `session_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
 }
@@ -66,19 +72,115 @@ export function buildRequest(question: string, state: AppState): ChatRequest {
   };
 }
 
-export async function askChat(request: ChatRequest): Promise<ChatResponse> {
-  const response = await fetch('/api/v1/chat/ask', {
+export async function askChatStream(
+  request: ChatRequest,
+  onChunk: (chunk: string) => void,
+  handlers: StreamLifecycleHandlers = {}
+): Promise<{ sessionId?: string; stage?: ChatResponse['stage'] }> {
+  const API_BASE = (import.meta.env.VITE_API_BASE as string) || '';
+  const params = new URLSearchParams();
+  params.set('sessionId', request.sessionId || '');
+  params.set('question', request.question || '');
+  params.set('targetCompany', request.targetCompany || '');
+  params.set('companyTier', request.companyTier || '');
+  params.set('targetRole', request.targetRole || '');
+  params.set('focusAreas', request.focusAreas || '');
+  params.set('resumeSummary', request.resumeSummary || '');
+  params.set('interviewGoal', request.interviewGoal || '');
+
+  const url = `${API_BASE}/api/v1/chat/stream?${params.toString()}`;
+  const eventSource = new EventSource(url);
+
+  let sessionId: string | undefined;
+  let stage: ChatResponse['stage'] | undefined;
+  let receivedAnyChunk = false;
+
+  return await new Promise((resolve, reject) => {
+    let finished = false;
+
+    const finish = () => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      eventSource.close();
+      handlers.onClose?.();
+      resolve({ sessionId, stage });
+    };
+
+    const fail = (error: Error) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      eventSource.close();
+      handlers.onError?.(error);
+      handlers.onClose?.();
+      reject(error);
+    };
+
+    eventSource.onopen = () => {
+      handlers.onOpen?.();
+    };
+
+    eventSource.addEventListener('meta', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as { sessionId?: string; stage?: ChatResponse['stage'] };
+        sessionId = payload.sessionId;
+        stage = payload.stage;
+      } catch {
+        // Ignore malformed meta payloads.
+      }
+    });
+
+    eventSource.onmessage = (event) => {
+      const text = (event as MessageEvent).data as string;
+      if (text) {
+        receivedAnyChunk = true;
+        onChunk(text);
+      }
+    };
+
+    eventSource.addEventListener('done', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as { sessionId?: string; stage?: ChatResponse['stage'] };
+        sessionId = payload.sessionId || sessionId;
+        stage = payload.stage || stage;
+      } catch {
+        // Ignore malformed done payloads.
+      }
+      finish();
+    });
+
+    eventSource.addEventListener('error', () => {
+      if (finished) {
+        return;
+      }
+      if (eventSource.readyState === EventSource.CLOSED) {
+        if (receivedAnyChunk) {
+          finish();
+          return;
+        }
+        fail(new Error('Request failed'));
+      }
+    });
+  });
+}
+
+export async function uploadResume(sessionId: string, file: File): Promise<{ resumeSummary?: string; missingFields?: string }> {
+  const fd = new FormData();
+  fd.append('sessionId', sessionId);
+  fd.append('file', file, file.name);
+
+  const resp = await fetch('/api/v1/profile/uploadResume', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8'
-    },
-    body: JSON.stringify(request)
+    body: fd
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Request failed with ${response.status}`);
+  if (!resp.ok) {
+    const t = await resp.text();
+    throw new Error(t || `upload failed ${resp.status}`);
   }
 
-  return response.json();
+  return resp.json();
 }

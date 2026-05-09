@@ -27,7 +27,12 @@ public class InterviewSessionMemory {
 
     public void mergeRequest(ChatRequest request) {
         profile.mergeFrom(request);
-        this.stage = profile.isComplete() ? ConversationStage.READY : ConversationStage.COLLECTING_PROFILE;
+        // Do not force the session into COLLECTING_PROFILE when profile is incomplete.
+        // Keep the current stage unless the profile becomes complete, in which case
+        // we mark the session as READY.
+        if (profile.isComplete()) {
+            this.stage = ConversationStage.READY;
+        }
     }
 
     public void addTurn(String question, String answer) {

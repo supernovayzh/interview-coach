@@ -7,11 +7,22 @@ import com.example.interviewcoach.model.ConversationStage;
 import com.example.interviewcoach.model.InterviewSessionMemory;
 import com.example.interviewcoach.service.ChatService;
 import com.example.interviewcoach.service.InterviewMemoryService;
+import com.example.interviewcoach.service.StreamingChatService;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import reactor.core.Disposable;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/chat")
@@ -19,11 +30,17 @@ public class ChatController {
 
     private final ChatService chatService;
     private final InterviewMemoryService memoryService;
+    private final StreamingChatService streamingChatService;
+    private final ObjectMapper objectMapper;
 
     public ChatController(ChatService chatService,
-                          InterviewMemoryService memoryService) {
+                          InterviewMemoryService memoryService,
+                          StreamingChatService streamingChatService,
+                          ObjectMapper objectMapper) {
         this.chatService = chatService;
         this.memoryService = memoryService;
+        this.streamingChatService = streamingChatService;
+        this.objectMapper = objectMapper;
     }
 
     @PostMapping("/ask")
@@ -45,5 +62,83 @@ public class ChatController {
             resp.setFollowUpQuestion(answerObj.getFollowUpQuestion());
         }
         return ResponseEntity.ok(resp);
+    }
+
+    @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamByGet(@ModelAttribute ChatRequest req) {
+        if (req == null || req.getQuestion() == null || req.getQuestion().isBlank()) {
+            SseEmitter emitter = new SseEmitter(0L);
+            try {
+                emitter.send(SseEmitter.event().name("error").data("question required"));
+                emitter.complete();
+            } catch (Exception ex) {
+                emitter.completeWithError(ex);
+            }
+            return emitter;
+        }
+
+        String sessionId = req.getEffectiveSessionId();
+        InterviewSessionMemory memory = memoryService.getOrCreate(sessionId);
+        ConversationStage stage = memory.getStage();
+        SseEmitter emitter = new SseEmitter(0L);
+
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("sessionId", sessionId);
+        meta.put("stage", stage.name());
+
+        try {
+            emitter.send(SseEmitter.event().name("meta").data(objectMapper.writeValueAsString(meta)));
+        } catch (Exception ex) {
+            emitter.completeWithError(ex);
+            return emitter;
+        }
+
+        Disposable[] disposableRef = new Disposable[1];
+        disposableRef[0] = streamingChatService.stream(req).subscribe(
+                chunk -> {
+                    try {
+                        if (chunk == null || chunk.isEmpty()) {
+                            return;
+                        }
+                        emitter.send(SseEmitter.event().data(chunk));
+                    } catch (Exception ex) {
+                        Disposable disposable = disposableRef[0];
+                        if (disposable != null && !disposable.isDisposed()) {
+                            disposable.dispose();
+                        }
+                        emitter.completeWithError(ex);
+                    }
+                },
+                error -> {
+                    try {
+                        emitter.send(SseEmitter.event().name("error").data(error.getMessage() == null ? "stream error" : error.getMessage()));
+                    } catch (Exception ignored) {
+                    }
+                    emitter.completeWithError(error);
+                },
+                () -> {
+                    try {
+                        emitter.send(SseEmitter.event().name("done").data(objectMapper.writeValueAsString(meta)));
+                        emitter.complete();
+                    } catch (Exception ex) {
+                        emitter.completeWithError(ex);
+                    }
+                }
+        );
+
+        emitter.onCompletion(() -> {
+            Disposable disposable = disposableRef[0];
+            if (disposable != null && !disposable.isDisposed()) {
+                disposable.dispose();
+            }
+        });
+        emitter.onTimeout(() -> {
+            Disposable disposable = disposableRef[0];
+            if (disposable != null && !disposable.isDisposed()) {
+                disposable.dispose();
+            }
+        });
+
+        return emitter;
     }
 }
