@@ -1,0 +1,17 @@
+{
+  "java.configuration.runtimes": [
+    {
+      "name": "JavaSE-11",
+      "path": "D:\\tools\\jdk-11"
+    },
+    {
+      "name": "JavaSE-17",
+      "path": "D:\\tools\\jdk-17"
+    }
+  ],
+  "java.home": "D:\\tools\\jdk-17",
+  "terminal.integrated.env.windows": {
+    "JAVA_HOME": "D:\\tools\\jdk-17",
+    "PATH": "D:\\tools\\jdk-17\\bin;${env:PATH}"
+  }
+}
