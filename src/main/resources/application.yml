@@ -23,3 +23,12 @@ rag:
   top-k: 3
   chunk-size: 1200
   min-score: 1
+
+web:
+  search:
+    enabled: false
+    api-key: "${web.search.apiKey:}"
+    endpoint: "https://serpapi.com/search.json"
+    engine: "google"
+    timeout-seconds: 12
+    default-top-k: 5

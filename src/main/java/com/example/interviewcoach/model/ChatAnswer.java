@@ -4,6 +4,8 @@ public class ChatAnswer {
     private String answer;
     private double score;
     private String scoreFeedback;
+    private String nextAction;
+    private String followUpQuestion;
 
     public ChatAnswer() {}
 
@@ -11,6 +13,22 @@ public class ChatAnswer {
         this.answer = answer;
         this.score = score;
         this.scoreFeedback = scoreFeedback;
+    }
+
+    public String getNextAction() {
+        return nextAction;
+    }
+
+    public void setNextAction(String nextAction) {
+        this.nextAction = nextAction;
+    }
+
+    public String getFollowUpQuestion() {
+        return followUpQuestion;
+    }
+
+    public void setFollowUpQuestion(String followUpQuestion) {
+        this.followUpQuestion = followUpQuestion;
     }
 
     public String getAnswer() {

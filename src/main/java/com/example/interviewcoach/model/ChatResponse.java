@@ -7,6 +7,8 @@ public class ChatResponse {
     private String missingFields;
     private double score;
     private String scoreFeedback;
+    private String nextAction;
+    private String followUpQuestion;
 
     public ChatResponse() {}
 
@@ -35,6 +37,22 @@ public class ChatResponse {
 
     public void setScoreFeedback(String scoreFeedback) {
         this.scoreFeedback = scoreFeedback;
+    }
+
+    public String getNextAction() {
+        return nextAction;
+    }
+
+    public void setNextAction(String nextAction) {
+        this.nextAction = nextAction;
+    }
+
+    public String getFollowUpQuestion() {
+        return followUpQuestion;
+    }
+
+    public void setFollowUpQuestion(String followUpQuestion) {
+        this.followUpQuestion = followUpQuestion;
     }
 
     public String getAnswer() {

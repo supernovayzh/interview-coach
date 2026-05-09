@@ -4,7 +4,9 @@ import com.example.interviewcoach.config.LlmOpenAiProperties;
 import com.example.interviewcoach.model.ChatAnswer;
 import com.example.interviewcoach.model.ChatRequest;
 import com.example.interviewcoach.model.ConversationStage;
-import com.example.interviewcoach.model.RagChunk;
+import com.example.interviewcoach.tool.InterviewToolContext;
+import com.example.interviewcoach.tool.InterviewToolResult;
+import com.example.interviewcoach.tool.ToolRegistry;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -19,17 +21,17 @@ public class LLMService implements ChatService {
     private final LlmOpenAiProperties properties;
     private final InterviewMemoryService memoryService;
     private final RagKnowledgeService ragKnowledgeService;
-    private final AnswerScoringService scoringService;
+    private final ToolRegistry toolRegistry;
 
     public LLMService(LlmOpenAiProperties properties,
                       WebClient.Builder webClientBuilder,
                       InterviewMemoryService memoryService,
                       RagKnowledgeService ragKnowledgeService,
-                      AnswerScoringService scoringService) {
+                      ToolRegistry toolRegistry) {
         this.properties = properties;
         this.memoryService = memoryService;
         this.ragKnowledgeService = ragKnowledgeService;
-        this.scoringService = scoringService;
+        this.toolRegistry = toolRegistry;
         this.webClient = webClientBuilder.baseUrl(properties.getEndpoint()).build();
     }
 
@@ -94,17 +96,7 @@ public class LLMService implements ChatService {
                                 if (content != null) {
                                     String answer = content.toString();
                                     memoryService.addTurn(sessionId, request.getQuestion(), answer);
-                                    // score the answer
-                                    double score = 0.0;
-                                    String feedback = "";
-                                    try {
-                                        var result = scoringService.score(request.getQuestion(), answer, ragContext);
-                                        score = result.getScore();
-                                        feedback = result.getFeedback();
-                                    } catch (Exception ex) {
-                                        feedback = "scoring failed: " + ex.getMessage();
-                                    }
-                                    return new ChatAnswer(answer, score, feedback);
+                                    return new ChatAnswer(answer, 0.0, "");
                                 }
                         }
                     }
@@ -136,7 +128,7 @@ public class LLMService implements ChatService {
     }
 
     private String buildRagContext(ChatRequest request, String memoryContext) {
-        if (ragKnowledgeService == null) {
+        if (toolRegistry == null || ragKnowledgeService == null) {
             return "";
         }
         StringBuilder query = new StringBuilder();
@@ -149,20 +141,22 @@ public class LLMService implements ChatService {
         if (memoryContext != null && !memoryContext.isBlank()) {
             query.append(memoryContext);
         }
-        List<RagChunk> results = ragKnowledgeService.search(query.toString(), 3);
-        if (results.isEmpty()) {
+        InterviewToolContext toolContext = new InterviewToolContext(request,
+            memoryService.getOrCreate(request.getEffectiveSessionId()),
+            request.getEffectiveSessionId(),
+            request.getQuestion(),
+            null,
+            null)
+                .withAttribute("query", query.toString())
+                .withAttribute("topK", 3);
+        InterviewToolResult result;
+        try {
+            result = toolRegistry.invoke("search", toolContext);
+        } catch (Exception ex) {
             return "";
         }
-        StringBuilder builder = new StringBuilder();
-        for (int i = 0; i < results.size(); i++) {
-            RagChunk chunk = results.get(i);
-            builder.append("【").append(i + 1).append("】");
-            builder.append(chunk.getTitle() == null ? "未命名" : chunk.getTitle());
-            builder.append(" (来源: ").append(chunk.getSourceFile()).append(", 分数: ")
-                    .append(String.format(java.util.Locale.ROOT, "%.2f", chunk.getScore())).append(")\n");
-            builder.append(chunk.preview(650)).append("\n");
-        }
-        return builder.toString();
+        String context = result.getString("context");
+        return context == null ? "" : context;
     }
 
     private void appendQueryIfNotBlank(StringBuilder builder, String value) {

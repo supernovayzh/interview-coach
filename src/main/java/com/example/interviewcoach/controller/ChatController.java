@@ -41,6 +41,8 @@ public class ChatController {
         if (answerObj != null) {
             resp.setScore(answerObj.getScore());
             resp.setScoreFeedback(answerObj.getScoreFeedback());
+            resp.setNextAction(answerObj.getNextAction());
+            resp.setFollowUpQuestion(answerObj.getFollowUpQuestion());
         }
         return ResponseEntity.ok(resp);
     }
