@@ -75,10 +75,11 @@ button {
 .app-shell {
   max-width: 1520px;
   margin: 0 auto;
-  min-height: calc(100vh - 48px);
+  height: calc(100vh - 48px);
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr) 360px;
   gap: 20px;
+  align-items: stretch;
 }
 
 .panel {
@@ -95,6 +96,8 @@ button {
   display: flex;
   flex-direction: column;
   gap: 18px;
+  min-height: 0;
+  overflow: auto;
 }
 
 .workspace {
@@ -104,6 +107,8 @@ button {
   flex-direction: column;
   gap: 18px;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .brand {
