@@ -1,0 +1,8 @@
+spring:
+  datasource:
+    url: jdbc:sqlite:./interview-coach-dev.db
+    driver-class-name: org.sqlite.JDBC
+
+app:
+  persistence:
+    enabled: true

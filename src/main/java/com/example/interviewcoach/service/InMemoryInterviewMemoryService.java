@@ -5,6 +5,8 @@ import com.example.interviewcoach.model.ChatTurn;
 import com.example.interviewcoach.model.ConversationStage;
 import com.example.interviewcoach.model.InterviewProfile;
 import com.example.interviewcoach.model.InterviewSessionMemory;
+import org.slf4j.MDC;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
@@ -14,6 +16,11 @@ import java.util.concurrent.ConcurrentHashMap;
 public class InMemoryInterviewMemoryService implements InterviewMemoryService {
 
     private final Map<String, InterviewSessionMemory> store = new ConcurrentHashMap<>();
+    private final ConversationPersistenceService conversationPersistenceService;
+
+    public InMemoryInterviewMemoryService(ObjectProvider<ConversationPersistenceService> conversationPersistenceServiceProvider) {
+        this.conversationPersistenceService = conversationPersistenceServiceProvider.getIfAvailable();
+    }
 
     @Override
     public InterviewSessionMemory getOrCreate(String sessionId) {
@@ -29,7 +36,19 @@ public class InMemoryInterviewMemoryService implements InterviewMemoryService {
 
     @Override
     public void addTurn(String sessionId, String question, String answer) {
-        getOrCreate(sessionId).addTurn(question, answer);
+        String normalizedSessionId = normalize(sessionId);
+        getOrCreate(normalizedSessionId).addTurn(question, answer);
+        if (conversationPersistenceService != null) {
+            conversationPersistenceService.saveConversationTurn(normalizedSessionId, question, answer, MDC.get("traceId"));
+        }
+    }
+
+    @Override
+    public void saveEvaluation(String sessionId, String question, Double score, String feedback) {
+        String normalizedSessionId = normalize(sessionId);
+        if (conversationPersistenceService != null) {
+            conversationPersistenceService.saveEvaluation(normalizedSessionId, question, score, feedback, MDC.get("traceId"));
+        }
     }
 
     @Override

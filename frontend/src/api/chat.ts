@@ -1,4 +1,4 @@
-import type { ChatRequest, ChatResponse, InterviewProfile } from '../types';
+import type { ChatRequest, ChatResponse, ConversationEvaluation, ConversationMessage, InterviewProfile } from '../types';
 
 const STORAGE_KEY = 'interview-coach-web-state';
 
@@ -60,15 +60,20 @@ export function saveAppState(state: AppState) {
 }
 
 export function buildRequest(question: string, state: AppState): ChatRequest {
+  const clip = (value: string | undefined, maxChars: number) => {
+    const text = (value || '').trim();
+    return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
+  };
+
   return {
     sessionId: state.sessionId,
-    question,
-    targetCompany: state.profile.targetCompany,
-    companyTier: state.profile.companyTier,
-    targetRole: state.profile.targetRole,
-    focusAreas: state.profile.focusAreas,
-    resumeSummary: state.profile.resumeSummary,
-    interviewGoal: state.profile.interviewGoal
+    question: clip(question, 600),
+    targetCompany: clip(state.profile.targetCompany, 80),
+    companyTier: clip(state.profile.companyTier, 80),
+    targetRole: clip(state.profile.targetRole, 120),
+    focusAreas: clip(state.profile.focusAreas, 200),
+    resumeSummary: clip(state.profile.resumeSummary, 1200),
+    interviewGoal: clip(state.profile.interviewGoal, 200)
   };
 }
 
@@ -76,7 +81,7 @@ export async function askChatStream(
   request: ChatRequest,
   onChunk: (chunk: string) => void,
   handlers: StreamLifecycleHandlers = {}
-): Promise<{ sessionId?: string; stage?: ChatResponse['stage'] }> {
+): Promise<{ sessionId?: string; stage?: ChatResponse['stage']; receivedAnyChunk: boolean }> {
   const API_BASE = (import.meta.env.VITE_API_BASE as string) || '';
   const params = new URLSearchParams();
   params.set('sessionId', request.sessionId || '');
@@ -95,7 +100,7 @@ export async function askChatStream(
   let stage: ChatResponse['stage'] | undefined;
   let receivedAnyChunk = false;
 
-  return await new Promise((resolve, reject) => {
+    return await new Promise((resolve, reject) => {
     let finished = false;
 
     const finish = () => {
@@ -105,7 +110,7 @@ export async function askChatStream(
       finished = true;
       eventSource.close();
       handlers.onClose?.();
-      resolve({ sessionId, stage });
+        resolve({ sessionId, stage, receivedAnyChunk });
     };
 
     const fail = (error: Error) => {
@@ -152,10 +157,29 @@ export async function askChatStream(
       finish();
     });
 
-    eventSource.addEventListener('error', () => {
+    eventSource.addEventListener('error', (ev: Event) => {
       if (finished) {
         return;
       }
+      // If server sent a named 'error' event carrying textual data, use it.
+      try {
+        const me = ev as MessageEvent;
+        const payload = me && (me.data as string);
+        if (payload && payload.trim()) {
+          // If we already received chunks, append a short system message and finish.
+          if (receivedAnyChunk) {
+            onChunk('\n\n[系统] ' + payload);
+            finish();
+            return;
+          }
+          // No chunks received yet — fail with the server-provided reason.
+          fail(new Error(payload));
+          return;
+        }
+      } catch (err) {
+        // ignore
+      }
+
       if (eventSource.readyState === EventSource.CLOSED) {
         if (receivedAnyChunk) {
           finish();
@@ -183,4 +207,63 @@ export async function uploadResume(sessionId: string, file: File): Promise<{ res
   }
 
   return resp.json();
+}
+
+export async function fetchConversationHistory(sessionId: string, limit = 50): Promise<ConversationMessage[]> {
+  const API_BASE = (import.meta.env.VITE_API_BASE as string) || '';
+  const params = new URLSearchParams();
+  params.set('sessionId', sessionId || '');
+  params.set('limit', String(limit));
+
+  const resp = await fetch(`${API_BASE}/api/v1/chat/history?${params.toString()}`);
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(text || `history query failed ${resp.status}`);
+  }
+
+  return resp.json();
+}
+
+export async function fetchConversationEvaluations(sessionId: string, limit = 20): Promise<ConversationEvaluation[]> {
+  const API_BASE = (import.meta.env.VITE_API_BASE as string) || '';
+  const params = new URLSearchParams();
+  params.set('sessionId', sessionId || '');
+  params.set('limit', String(limit));
+
+  const resp = await fetch(`${API_BASE}/api/v1/chat/evaluations?${params.toString()}`);
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(text || `evaluation query failed ${resp.status}`);
+  }
+
+  return resp.json();
+}
+
+export async function generateConversationTitle(sessionId: string): Promise<{ sessionId: string; title: string }> {
+  const API_BASE = (import.meta.env.VITE_API_BASE as string) || '';
+  const params = new URLSearchParams();
+  params.set('sessionId', sessionId || '');
+
+  const resp = await fetch(`${API_BASE}/api/v1/chat/session-title?${params.toString()}`);
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(text || `title generation failed ${resp.status}`);
+  }
+
+  return resp.json();
+}
+
+export async function deleteConversationSession(sessionId: string): Promise<void> {
+  const API_BASE = (import.meta.env.VITE_API_BASE as string) || '';
+  const params = new URLSearchParams();
+  params.set('sessionId', sessionId || '');
+
+  const resp = await fetch(`${API_BASE}/api/v1/chat/session?${params.toString()}`, {
+    method: 'DELETE'
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(text || `delete session failed ${resp.status}`);
+  }
 }

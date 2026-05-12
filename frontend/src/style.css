@@ -146,6 +146,13 @@ button {
   color: var(--muted);
 }
 
+.session-title {
+  margin: 8px 0 2px;
+  color: var(--text);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
 .sidebar-card {
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
@@ -186,6 +193,10 @@ button {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.secondary-btn {
+  margin-top: 10px;
+}
+
 .ghost-btn:hover,
 .primary-btn:hover,
 .quick-pill:hover {
@@ -197,6 +208,121 @@ button {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.history-list {
+  display: grid;
+  gap: 10px;
+}
+
+.history-item {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  text-align: left;
+}
+
+.history-item.active {
+  border-color: rgba(125, 211, 252, 0.42);
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.history-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.history-session {
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.history-preview {
+  font-size: 0.84rem;
+  color: var(--muted);
+  line-height: 1.5;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.history-side {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+.history-status {
+  font-size: 0.76rem;
+  color: var(--muted);
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+}
+
+.history-empty {
+  padding: 6px 0 2px;
+}
+
+.evaluation-list {
+  display: grid;
+  gap: 10px;
+}
+
+.evaluation-item {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 12px 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.evaluation-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.evaluation-head strong {
+  color: var(--accent);
+  font-size: 1.05rem;
+}
+
+.evaluation-meta {
+  font-size: 0.76rem;
+  color: var(--muted);
+  padding: 5px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.evaluation-question {
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.evaluation-feedback {
+  border-top: 1px dashed var(--line);
+  padding-top: 8px;
+}
+
+.evaluation-time {
+  font-size: 0.76rem;
 }
 
 .quick-pill {

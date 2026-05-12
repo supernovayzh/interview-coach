@@ -6,12 +6,16 @@ import {
   askChatStream,
   buildRequest,
   createSessionId,
+  deleteConversationSession,
+  fetchConversationEvaluations,
+  fetchConversationHistory,
+  generateConversationTitle,
   loadAppState,
   saveAppState,
   uploadResume,
   type AppState
 } from './api/chat';
-import type { ChatMessage } from './types';
+import type { ChatMessage, ConversationEvaluation } from './types';
 
 const appState = ref<AppState>(loadAppState());
 const input = ref('');
@@ -20,7 +24,117 @@ const isAiTyping = ref(false);
 const isStreaming = ref(false);
 const currentAiResponse = ref('');
 const error = ref('');
+const historyLoading = ref(false);
+const evaluationLoading = ref(false);
+const activeHistorySessionId = ref('');
+const evaluations = ref<ConversationEvaluation[]>([]);
 const scrollAnchor = ref<HTMLElement | null>(null);
+
+type RecentSession = {
+  sessionId: string;
+  updatedAt: number;
+  title?: string;
+  preview: string;
+};
+
+const RECENT_SESSIONS_KEY = 'interview-coach-web-recent-sessions';
+
+function loadRecentSessions(): RecentSession[] {
+  try {
+    const raw = localStorage.getItem(RECENT_SESSIONS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as RecentSession[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentSessions(sessions: RecentSession[]) {
+  localStorage.setItem(RECENT_SESSIONS_KEY, JSON.stringify(sessions.slice(0, 12)));
+}
+
+function removeRecentSession(sessionId: string) {
+  recentSessions.value = recentSessions.value.filter((item) => item.sessionId !== sessionId);
+  saveRecentSessions(recentSessions.value);
+}
+
+const recentSessions = ref<RecentSession[]>(loadRecentSessions());
+
+function getMessagePreview(messagesList: ChatMessage[]) {
+  const candidate = [...messagesList].reverse().find((message) => message.content.trim());
+  const text = candidate?.content?.trim() || '空会话';
+  return text.length > 42 ? `${text.slice(0, 42)}...` : text;
+}
+
+function upsertRecentSession(sessionId: string, messagesList: ChatMessage[], title?: string) {
+  if (!sessionId) return;
+  const existing = recentSessions.value.find((item) => item.sessionId === sessionId);
+  const nextItem: RecentSession = {
+    sessionId,
+    updatedAt: Date.now(),
+    title: title || existing?.title || getMessagePreview(messagesList),
+    preview: getMessagePreview(messagesList)
+  };
+  recentSessions.value = [
+    nextItem,
+    ...recentSessions.value.filter((item) => item.sessionId !== sessionId)
+  ].slice(0, 12);
+  saveRecentSessions(recentSessions.value);
+}
+
+async function loadHistoryForSession(sessionId: string, keepCurrentIfEmpty = true, showError = false) {
+  if (!sessionId || historyLoading.value) return;
+  historyLoading.value = true;
+  activeHistorySessionId.value = sessionId;
+  try {
+    const history = await fetchConversationHistory(sessionId, 80);
+    appState.value.sessionId = sessionId;
+    if (history.length > 0) {
+      messages.value = history.map((item, index) => ({
+        id: `${sessionId}-${item.createdAt || index}-${index}`,
+        role: item.role === 'user' ? 'user' : 'assistant',
+        content: item.content || ''
+      }));
+    } else if (!keepCurrentIfEmpty) {
+      messages.value = [
+        {
+          id: `welcome-empty-${Date.now()}`,
+          role: 'assistant',
+          content: '这个会话目前还没有历史消息。你可以直接继续提问。'
+        }
+      ];
+    }
+    upsertRecentSession(sessionId, messages.value);
+    persist();
+  } catch (err) {
+    if (showError) {
+      error.value = err instanceof Error ? err.message : '加载历史失败';
+    } else {
+      console.warn('history load failed', err);
+    }
+  } finally {
+    activeHistorySessionId.value = '';
+    historyLoading.value = false;
+    scrollToBottom();
+  }
+}
+
+async function loadEvaluationsForSession(sessionId: string, showError = false) {
+  if (!sessionId || evaluationLoading.value) return;
+  evaluationLoading.value = true;
+  try {
+    evaluations.value = await fetchConversationEvaluations(sessionId, 20);
+  } catch (err) {
+    if (showError) {
+      error.value = err instanceof Error ? err.message : '加载评分失败';
+    } else {
+      console.warn('evaluation load failed', err);
+    }
+  } finally {
+    evaluationLoading.value = false;
+  }
+}
 const stageText = computed(() => {
   const map: Record<AppState['stage'], string> = {
     INIT: '初始化',
@@ -31,6 +145,10 @@ const stageText = computed(() => {
   return map[appState.value.stage];
 });
 
+const currentSessionTitle = computed(() => {
+  return recentSessions.value.find((item) => item.sessionId === appState.value.sessionId)?.title || '';
+});
+
 marked.setOptions({
   breaks: true,
   gfm: true
@@ -39,6 +157,26 @@ marked.setOptions({
 function renderMarkdown(content: string) {
   const html = marked.parse(content ?? '', { async: false }) as string;
   return DOMPurify.sanitize(html);
+}
+
+function escapeHtml(text: string) {
+  return (text ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function renderPlainText(content: string) {
+  return escapeHtml(content ?? '').replace(/\n/g, '<br>');
+}
+
+function renderMessageContent(message: ChatMessage) {
+  if (isStreaming.value && message.role === 'assistant') {
+    return renderPlainText(message.content);
+  }
+  return renderMarkdown(message.content);
 }
 
 const messages = ref<ChatMessage[]>([
@@ -133,6 +271,7 @@ function resetSession() {
     }
   ];
   error.value = '';
+  upsertRecentSession(appState.value.sessionId, messages.value);
   persist();
 }
 
@@ -158,26 +297,33 @@ async function sendQuestion(rawQuestion: string) {
   currentAiResponse.value = '';
   error.value = '';
 
-  try {
-    const response = await askChatStream(
-      buildRequest(question, appState.value),
-      (chunk) => {
-        currentAiResponse.value += chunk;
-        patchMessageContent(assistantMessage.id, currentAiResponse.value);
-        scrollToBottom();
-      },
-      {
-        onClose: () => {
-          isStreaming.value = false;
+    try {
+      const response = await askChatStream(
+        buildRequest(question, appState.value),
+        (chunk) => {
+          currentAiResponse.value += chunk;
+          patchMessageContent(assistantMessage.id, currentAiResponse.value);
+          scrollToBottom();
+        },
+        {
+          onClose: () => {
+            isStreaming.value = false;
+          }
         }
+      );
+      if (response.stage) {
+        appState.value.stage = response.stage;
       }
-    );
-    if (response.stage) {
-      appState.value.stage = response.stage;
-    }
-    if (response.sessionId) {
-      appState.value.sessionId = response.sessionId;
-    }
+      if (response.sessionId) {
+        appState.value.sessionId = response.sessionId;
+      }
+      // 如果没有收到任何流式 token，移除空的 AI 气泡并提示
+      if (!response.receivedAnyChunk) {
+        messages.value = messages.value.filter((m) => m.id !== assistantMessage.id);
+        error.value = '未收到回答（可能上游模型不可用）';
+      }
+    await loadEvaluationsForSession(appState.value.sessionId, false);
+    upsertRecentSession(appState.value.sessionId, messages.value);
     persist();
   } catch (err) {
     if (!currentAiResponse.value.trim()) {
@@ -196,6 +342,44 @@ function fillPrompt(prompt: string) {
   input.value = prompt;
 }
 
+function openHistory(sessionId: string) {
+  loadHistoryForSession(sessionId, false, false);
+  loadEvaluationsForSession(sessionId, false);
+}
+
+async function deleteHistorySession(sessionId: string) {
+  if (!sessionId) return;
+  const confirmed = window.confirm(`确认删除会话 ${sessionId} 吗？该会话的历史消息和评分都会被删除。`);
+  if (!confirmed) return;
+  try {
+    await deleteConversationSession(sessionId);
+    removeRecentSession(sessionId);
+    if (appState.value.sessionId === sessionId) {
+      resetSession();
+    } else {
+      if (activeHistorySessionId.value === sessionId) {
+        activeHistorySessionId.value = '';
+      }
+      await loadEvaluationsForSession(appState.value.sessionId, false);
+    }
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '删除会话失败';
+  }
+}
+
+async function saveCurrentSessionToHistory() {
+  try {
+    const result = await generateConversationTitle(appState.value.sessionId);
+    upsertRecentSession(appState.value.sessionId, messages.value, result.title);
+    persist();
+    error.value = '';
+  } catch (err) {
+    upsertRecentSession(appState.value.sessionId, messages.value);
+    persist();
+    error.value = err instanceof Error ? err.message : '标题生成失败，已按默认内容保存';
+  }
+}
+
 function scrollToBottom() {
   requestAnimationFrame(() => {
     scrollAnchor.value?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -204,6 +388,8 @@ function scrollToBottom() {
 
 watch(messages, scrollToBottom, { deep: true });
 onMounted(() => {
+  recentSessions.value = loadRecentSessions();
+  loadEvaluationsForSession(appState.value.sessionId, false);
   scrollToBottom();
 });
 </script>
@@ -225,8 +411,44 @@ onMounted(() => {
           <span class="stage-chip">{{ stageText }}</span>
         </div>
         <p class="muted">Session</p>
-        <code class="session-id">{{ appState.sessionId }}</code>
+        <div class="session-title">{{ currentSessionTitle || '未命名会话' }}</div>
         <button class="ghost-btn" @click="resetSession">重置会话</button>
+        <button class="ghost-btn secondary-btn" @click="saveCurrentSessionToHistory">保存当前会话</button>
+      </section>
+
+      <section class="sidebar-card">
+        <div class="card-title-row">
+          <h2>历史会话</h2>
+          <span class="muted">History</span>
+        </div>
+        <p class="muted compact">点开任一历史会话，会把该 session 的消息加载回来，继续同一个会话聊下去。</p>
+        <div v-if="recentSessions.length === 0" class="history-empty muted compact">暂时没有历史会话。</div>
+        <div v-else class="history-list">
+          <div
+            v-for="session in recentSessions"
+            :key="session.sessionId"
+            class="history-item"
+            :class="{ active: appState.sessionId === session.sessionId }"
+            @click="openHistory(session.sessionId)"
+          >
+            <div class="history-main">
+              <div class="history-session">{{ session.title || '未命名会话' }}</div>
+              <div class="history-preview">{{ session.preview }}</div>
+            </div>
+            <div class="history-side">
+              <span v-if="activeHistorySessionId === session.sessionId" class="history-status">载入中</span>
+              <span v-else class="history-status">继续</span>
+              <button
+                class="history-delete-btn"
+                type="button"
+                title="删除该会话"
+                @click.stop="deleteHistorySession(session.sessionId)"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section class="sidebar-card">
@@ -239,6 +461,31 @@ onMounted(() => {
           <li>如果你愿意，可以把简历 PDF 上传给我，我会尽量提取信息。</li>
           <li>如果你只想专项训练某块知识，可以在重点方向里写 Redis / 网络 / JVM 等。</li>
         </ul>
+      </section>
+
+      <section class="sidebar-card">
+        <div class="card-title-row">
+          <h2>评分与反馈</h2>
+          <span class="muted">Eval</span>
+        </div>
+        <p class="muted compact">这里只展示当前会话最近几次参考评分，方便你回看自己的回答质量。</p>
+        <div v-if="evaluationLoading" class="history-empty muted compact">评分加载中...</div>
+        <div v-else-if="evaluations.length === 0" class="history-empty muted compact">当前会话还没有评分记录。</div>
+        <div v-else class="evaluation-list">
+          <article
+            v-for="item in evaluations"
+            :key="`${item.traceId || 'trace'}-${item.createdAt || ''}-${item.question || ''}`"
+            class="evaluation-item"
+          >
+            <div class="evaluation-head">
+              <strong>{{ item.score?.toFixed?.(1) ?? 'N/A' }}</strong>
+              <span class="evaluation-meta">参考分数</span>
+            </div>
+            <div class="evaluation-question">{{ item.question || '未记录问题' }}</div>
+            <div v-if="item.feedback" class="evaluation-feedback markdown-body" v-html="renderMarkdown(item.feedback)"></div>
+            <div class="evaluation-time muted">{{ item.createdAt || '' }}</div>
+          </article>
+        </div>
       </section>
 
       <section class="sidebar-card">
@@ -279,7 +526,11 @@ onMounted(() => {
             :class="message.role"
           >
             <div class="message-badge">{{ message.role === 'user' ? '你' : '陪练' }}</div>
-            <div class="message-bubble markdown-body" v-html="renderMarkdown(message.content)"></div>
+            <div
+              class="message-bubble markdown-body"
+              :class="{ streaming: isStreaming && message.role === 'assistant' }"
+              v-html="renderMessageContent(message)"
+            ></div>
           </article>
           <div v-if="isAiTyping" class="typing-indicator" :class="{ streaming: isStreaming }">
             <span>AI 正在输入</span>

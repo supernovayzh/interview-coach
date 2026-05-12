@@ -3,18 +3,22 @@ package com.example.interviewcoach.controller;
 import com.example.interviewcoach.model.ChatRequest;
 import com.example.interviewcoach.model.ChatResponse;
 import com.example.interviewcoach.model.ChatAnswer;
+import com.example.interviewcoach.model.ConversationMessage;
 import com.example.interviewcoach.model.ConversationStage;
 import com.example.interviewcoach.model.InterviewSessionMemory;
 import com.example.interviewcoach.service.ChatService;
 import com.example.interviewcoach.service.InterviewMemoryService;
+import com.example.interviewcoach.service.ConversationPersistenceService;
+import com.example.interviewcoach.service.LlmSummarizerService;
 import com.example.interviewcoach.service.StreamingChatService;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -22,6 +26,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -31,15 +36,21 @@ public class ChatController {
     private final ChatService chatService;
     private final InterviewMemoryService memoryService;
     private final StreamingChatService streamingChatService;
+    private final ConversationPersistenceService conversationPersistenceService;
+    private final LlmSummarizerService llmSummarizerService;
     private final ObjectMapper objectMapper;
 
     public ChatController(ChatService chatService,
                           InterviewMemoryService memoryService,
                           StreamingChatService streamingChatService,
+                          ConversationPersistenceService conversationPersistenceService,
+                          LlmSummarizerService llmSummarizerService,
                           ObjectMapper objectMapper) {
         this.chatService = chatService;
         this.memoryService = memoryService;
         this.streamingChatService = streamingChatService;
+        this.conversationPersistenceService = conversationPersistenceService;
+        this.llmSummarizerService = llmSummarizerService;
         this.objectMapper = objectMapper;
     }
 
@@ -89,7 +100,7 @@ public class ChatController {
         try {
             emitter.send(SseEmitter.event().name("meta").data(objectMapper.writeValueAsString(meta)));
         } catch (Exception ex) {
-            emitter.completeWithError(ex);
+            emitter.complete();
             return emitter;
         }
 
@@ -106,7 +117,7 @@ public class ChatController {
                         if (disposable != null && !disposable.isDisposed()) {
                             disposable.dispose();
                         }
-                        emitter.completeWithError(ex);
+                        emitter.complete();
                     }
                 },
                 error -> {
@@ -114,7 +125,7 @@ public class ChatController {
                         emitter.send(SseEmitter.event().name("error").data(error.getMessage() == null ? "stream error" : error.getMessage()));
                     } catch (Exception ignored) {
                     }
-                    emitter.completeWithError(error);
+                    emitter.complete();
                 },
                 () -> {
                     try {
@@ -140,5 +151,37 @@ public class ChatController {
         });
 
         return emitter;
+    }
+
+    @GetMapping("/history")
+    public ResponseEntity<List<ConversationMessage>> history(@RequestParam String sessionId,
+                                                             @RequestParam(defaultValue = "50") int limit) {
+        return ResponseEntity.ok(conversationPersistenceService.listMessages(sessionId, limit));
+    }
+
+    @GetMapping("/evaluations")
+    public ResponseEntity<List<ConversationPersistenceService.EvaluationRecord>> evaluations(@RequestParam String sessionId,
+                                                                                              @RequestParam(defaultValue = "50") int limit) {
+        List<ConversationPersistenceService.EvaluationRecord> evals = conversationPersistenceService.listEvaluations(sessionId, limit);
+        return ResponseEntity.ok(evals);
+    }
+
+    @GetMapping("/session-title")
+    public ResponseEntity<?> sessionTitle(@RequestParam String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return ResponseEntity.badRequest().body("sessionId required");
+        }
+        List<ConversationMessage> messages = conversationPersistenceService.listMessages(sessionId, 12);
+        String title = llmSummarizerService.generateSessionTitle(messages);
+        return ResponseEntity.ok(Map.of("sessionId", sessionId, "title", title == null ? "" : title));
+    }
+
+    @DeleteMapping("/session")
+    public ResponseEntity<?> deleteSession(@RequestParam String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return ResponseEntity.badRequest().body("sessionId required");
+        }
+        conversationPersistenceService.deleteSession(sessionId);
+        return ResponseEntity.ok(Map.of("sessionId", sessionId, "deleted", true));
     }
 }

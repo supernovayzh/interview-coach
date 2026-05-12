@@ -16,7 +16,7 @@ public class InterviewOrchestrator implements ChatService {
     private final LLMService llmService;
     private final InterviewMemoryService memoryService;
     private final ToolRegistry toolRegistry;
-    private final RagKnowledgeService ragKnowledgeService;
+    private final RagSearchService ragSearchService;
     private final PlannerService plannerService;
 
     // thresholds can be moved to config later
@@ -26,12 +26,12 @@ public class InterviewOrchestrator implements ChatService {
     public InterviewOrchestrator(LLMService llmService,
                                   InterviewMemoryService memoryService,
                                   ToolRegistry toolRegistry,
-                                  RagKnowledgeService ragKnowledgeService,
+                                  RagSearchService ragSearchService,
                                   PlannerService plannerService) {
         this.llmService = llmService;
         this.memoryService = memoryService;
         this.toolRegistry = toolRegistry;
-        this.ragKnowledgeService = ragKnowledgeService;
+        this.ragSearchService = ragSearchService;
         this.plannerService = plannerService;
     }
 
@@ -77,10 +77,7 @@ public class InterviewOrchestrator implements ChatService {
                 }
                 // append summary if present
                 String summary = planResult.getString("summary");
-                if (summary != null && !summary.isBlank()) {
-                    String fb = answer.getScoreFeedback() == null ? "" : answer.getScoreFeedback();
-                    answer.setScoreFeedback(fb + "\n会话复盘：\n" + summary);
-                }
+                appendSummaryFeedback(answer, summary);
             }
         } catch (Exception ex) {
             applyRuleBasedDecision(answer, context);
@@ -89,42 +86,25 @@ public class InterviewOrchestrator implements ChatService {
         if (mem.getRecentTurns().size() >= 15) {
             InterviewToolResult summaryResult = toolRegistry.invoke("summarize", context);
             String summary = summaryResult.getString("summary");
-            String fb = answer.getScoreFeedback() == null ? "" : answer.getScoreFeedback();
-            if (summary != null && !summary.isBlank()) {
-                answer.setScoreFeedback(fb + "\n会话复盘：\n" + summary);
+            appendSummaryFeedback(answer, summary);
+        }
+
+        // persist evaluation if available
+        try {
+            double s = answer.getScore();
+            String fb = answer.getScoreFeedback();
+            // only persist when score or feedback present
+            if (s != 0.0 || (fb != null && !fb.isBlank())) {
+                memoryService.saveEvaluation(sessionId, request.getQuestion(), s, fb);
             }
+        } catch (Exception ignored) {
         }
 
         return answer;
     }
 
     private String buildRagContext(ChatRequest request, String sessionId) {
-        if (toolRegistry == null || ragKnowledgeService == null) {
-            return "";
-        }
-        StringBuilder query = new StringBuilder();
-        query.append(request.getQuestion()).append(' ');
-        appendQueryIfNotBlank(query, request.getTargetCompany());
-        appendQueryIfNotBlank(query, request.getCompanyTier());
-        appendQueryIfNotBlank(query, request.getTargetRole());
-        appendQueryIfNotBlank(query, request.getFocusAreas());
-        appendQueryIfNotBlank(query, request.getInterviewGoal());
-        InterviewToolContext searchContext = new InterviewToolContext(request, memoryService.getOrCreate(sessionId), sessionId, request.getQuestion(), null, null)
-                .withAttribute("query", query.toString())
-                .withAttribute("topK", 3);
-        try {
-            InterviewToolResult result = toolRegistry.invoke("search", searchContext);
-            String context = result.getString("context");
-            return context == null ? "" : context;
-        } catch (Exception ex) {
-            return "";
-        }
-    }
-
-    private void appendQueryIfNotBlank(StringBuilder builder, String value) {
-        if (value != null && !value.isBlank()) {
-            builder.append(value).append(' ');
-        }
+        return ragSearchService.search(request, sessionId, null, 3);
     }
 
     private void applyRuleBasedDecision(ChatAnswer answer, InterviewToolContext context) {
@@ -149,10 +129,14 @@ public class InterviewOrchestrator implements ChatService {
         if (context.getMemory().getRecentTurns().size() >= 15) {
             InterviewToolResult summaryResult = toolRegistry.invoke("summarize", context);
             String summary = summaryResult.getString("summary");
+            appendSummaryFeedback(answer, summary);
+        }
+    }
+
+    private void appendSummaryFeedback(ChatAnswer answer, String summary) {
+        if (summary != null && !summary.isBlank()) {
             String fb = answer.getScoreFeedback() == null ? "" : answer.getScoreFeedback();
-            if (summary != null && !summary.isBlank()) {
-                answer.setScoreFeedback(fb + "\n会话复盘：\n" + summary);
-            }
+            answer.setScoreFeedback(fb + "\n会话复盘：\n" + summary);
         }
     }
 }

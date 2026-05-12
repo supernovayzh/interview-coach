@@ -11,6 +11,8 @@ public interface InterviewMemoryService {
 
     void addTurn(String sessionId, String question, String answer);
 
+    void saveEvaluation(String sessionId, String question, Double score, String feedback);
+
     String buildContext(String sessionId);
 
     ConversationStage getStage(String sessionId);

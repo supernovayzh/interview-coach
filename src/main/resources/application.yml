@@ -3,6 +3,8 @@ server:
 spring:
   application:
     name: interview-coach
+  profiles:
+    default: dev
   # placeholder for config: llm.apiKey, redis, vector store endpoints
   config:
     import: optional:file:./secrets.yml
