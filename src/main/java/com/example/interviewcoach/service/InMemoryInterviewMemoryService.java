@@ -15,6 +15,9 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class InMemoryInterviewMemoryService implements InterviewMemoryService {
 
+    private static final int MAX_CONTEXT_FIELD_CHARS = 120;
+    private static final int MAX_CONTEXT_TURN_CHARS = 180;
+
     private final Map<String, InterviewSessionMemory> store = new ConcurrentHashMap<>();
     private final ConversationPersistenceService conversationPersistenceService;
 
@@ -56,18 +59,18 @@ public class InMemoryInterviewMemoryService implements InterviewMemoryService {
         InterviewSessionMemory memory = getOrCreate(sessionId);
         InterviewProfile profile = memory.getProfile();
         StringBuilder sb = new StringBuilder();
-        appendIfNotBlank(sb, "目标公司", profile.getTargetCompany());
-        appendIfNotBlank(sb, "公司类型/规模", profile.getCompanyTier());
-        appendIfNotBlank(sb, "目标岗位", profile.getTargetRole());
-        appendIfNotBlank(sb, "重点考察方向", profile.getFocusAreas());
-        appendIfNotBlank(sb, "简历摘要", profile.getResumeSummary());
-        appendIfNotBlank(sb, "本次目标", profile.getInterviewGoal());
+        appendIfNotBlank(sb, "目标公司", clip(profile.getTargetCompany(), MAX_CONTEXT_FIELD_CHARS));
+        appendIfNotBlank(sb, "公司类型/规模", clip(profile.getCompanyTier(), MAX_CONTEXT_FIELD_CHARS));
+        appendIfNotBlank(sb, "目标岗位", clip(profile.getTargetRole(), MAX_CONTEXT_FIELD_CHARS));
+        appendIfNotBlank(sb, "重点考察方向", clip(profile.getFocusAreas(), MAX_CONTEXT_FIELD_CHARS));
+        appendIfNotBlank(sb, "简历摘要", clip(profile.getResumeSummary(), MAX_CONTEXT_FIELD_CHARS));
+        appendIfNotBlank(sb, "本次目标", clip(profile.getInterviewGoal(), MAX_CONTEXT_FIELD_CHARS));
         if (!memory.getRecentTurns().isEmpty()) {
             sb.append("最近对话：\n");
             for (ChatTurn turn : memory.getRecentTurns()) {
-                sb.append("Q: ").append(turn.getQuestion()).append('\n');
+                sb.append("Q: ").append(clip(turn.getQuestion(), MAX_CONTEXT_TURN_CHARS)).append('\n');
                 if (turn.getAnswer() != null && !turn.getAnswer().isBlank()) {
-                    sb.append("A: ").append(turn.getAnswer()).append('\n');
+                    sb.append("A: ").append(clip(turn.getAnswer(), MAX_CONTEXT_TURN_CHARS)).append('\n');
                 }
             }
         }
@@ -93,5 +96,16 @@ public class InMemoryInterviewMemoryService implements InterviewMemoryService {
         if (value != null && !value.isBlank()) {
             sb.append(label).append("：").append(value).append('\n');
         }
+    }
+
+    private String clip(String value, int maxChars) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.trim();
+        if (text.length() <= maxChars) {
+            return text;
+        }
+        return text.substring(0, maxChars) + "…";
     }
 }

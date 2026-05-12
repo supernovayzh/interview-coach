@@ -6,7 +6,7 @@ import java.util.Deque;
 public class InterviewSessionMemory {
     private final InterviewProfile profile = new InterviewProfile();
     private final Deque<ChatTurn> recentTurns = new ArrayDeque<>();
-    private int maxTurns = 6;
+    private int maxTurns = 4;
     private ConversationStage stage = ConversationStage.INIT;
 
     public InterviewProfile getProfile() {

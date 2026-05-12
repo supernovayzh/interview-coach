@@ -10,8 +10,8 @@ public class LlmOpenAiProperties {
     private String apiKey;
     private String model;
     private String endpoint;
-    private Integer maxTokens = 512;
-    private String systemPrompt = "你是一个专业的Java后端面试陪练。你要先根据用户画像判断面试场景，再给出符合公司层级和考察重点的回答。回答风格要简洁、专业、结构化，优先给出可落地的工程实践建议。";
+    private Integer maxTokens = 1024;
+    private String systemPrompt = "你要扮演Java后端面试官，而不是替用户回答的陪练。默认目标是按面试官视角与用户进行一问一答的互动：每次只问一个具体问题，等待用户回答后再决定是追问、给建议，还是进入下一个问题。不要一次提出多个问题，不要自问自答，不要先替用户总结答案。";
 
     public String getApiKey() {
         return apiKey;

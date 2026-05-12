@@ -65,9 +65,9 @@ public class LlmClarifierService implements ClarifierService {
 
     private String buildPrompt(String question, String answer, String ragContext) {
         StringBuilder sb = new StringBuilder();
-        sb.append("请基于下面的面试问题与回答生成一个简洁的追问，只能输出一个问题句。\n");
-        sb.append("要求：只问一个具体问题，不要连问多个问题，不要给出答案，不要加入解释性段落。\n");
-        sb.append("如果你想到多个追问，只保留最重要的一个。\n");
+        sb.append("你正在扮演面试官，请基于下面的面试问题与回答生成下一步追问。\n");
+        sb.append("要求：每次只输出一个具体问题，等待用户回答后再继续；不要连问多个问题，不要给出答案，不要加入解释性段落，不要使用“问题：/回答：”的自问自答格式。\n");
+        sb.append("如果你想到多个追问，只保留最重要的一个，优先问最能检验理解的问题。\n");
         sb.append("问题：\n").append(question).append("\n");
         sb.append("回答：\n").append(answer).append("\n");
         if (ragContext != null && !ragContext.isBlank()) sb.append("参考材料：\n").append(ragContext).append("\n");
