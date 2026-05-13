@@ -1,0 +1,10 @@
+.git
+.github
+.idea
+.vscode
+target
+frontend/node_modules
+frontend/dist
+node_modules
+*.log
+README.md
