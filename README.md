@@ -2,6 +2,12 @@
 
 MVP: Spring Boot + LLM placeholder + simple chat API.
 
+项目：Interview Coach — 面试陪练 agent
+状态：
+- 前端（Vercel）: 已部署 — https://interview-coach-alpha.vercel.app
+- 后端: 暂未对外部署
+
+
 ## Features
 
 - LLM interview chat orchestration
