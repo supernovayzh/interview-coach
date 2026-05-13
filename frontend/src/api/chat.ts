@@ -14,6 +14,24 @@ export type StreamLifecycleHandlers = {
   onError?: (error: Error) => void;
 };
 
+function isNgrokHost(url: string): boolean {
+  return /\.ngrok(-free)?\.dev/i.test(url) || /\.ngrok\.io/i.test(url);
+}
+
+function withNgrokBypassHeaders(url: string, init?: RequestInit): RequestInit {
+  if (!isNgrokHost(url)) {
+    return init || {};
+  }
+
+  const headers = new Headers(init?.headers || {});
+  // Avoid ngrok free-plan interstitial page (ERR_NGROK_6024) for browser requests.
+  headers.set('ngrok-skip-browser-warning', '1');
+  return {
+    ...(init || {}),
+    headers
+  };
+}
+
 export function createSessionId() {
   return `session_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
 }
@@ -94,101 +112,121 @@ export async function askChatStream(
   params.set('interviewGoal', request.interviewGoal || '');
 
   const url = `${API_BASE}/api/v1/chat/stream?${params.toString()}`;
-  const eventSource = new EventSource(url);
 
   let sessionId: string | undefined;
   let stage: ChatResponse['stage'] | undefined;
   let receivedAnyChunk = false;
 
-    return await new Promise((resolve, reject) => {
-    let finished = false;
+  const handleSseEvent = (eventName: string, data: string) => {
+    const normalizedName = (eventName || 'message').trim();
+    const text = data || '';
 
-    const finish = () => {
-      if (finished) {
-        return;
-      }
-      finished = true;
-      eventSource.close();
-      handlers.onClose?.();
-        resolve({ sessionId, stage, receivedAnyChunk });
-    };
-
-    const fail = (error: Error) => {
-      if (finished) {
-        return;
-      }
-      finished = true;
-      eventSource.close();
-      handlers.onError?.(error);
-      handlers.onClose?.();
-      reject(error);
-    };
-
-    eventSource.onopen = () => {
-      handlers.onOpen?.();
-    };
-
-    eventSource.addEventListener('meta', (event) => {
+    if (normalizedName === 'meta') {
       try {
-        const payload = JSON.parse((event as MessageEvent).data) as { sessionId?: string; stage?: ChatResponse['stage'] };
-        sessionId = payload.sessionId;
-        stage = payload.stage;
+        const payload = JSON.parse(text) as { sessionId?: string; stage?: ChatResponse['stage'] };
+        sessionId = payload.sessionId || sessionId;
+        stage = payload.stage || stage;
       } catch {
         // Ignore malformed meta payloads.
       }
-    });
+      return;
+    }
 
-    eventSource.onmessage = (event) => {
-      const text = (event as MessageEvent).data as string;
-      if (text) {
-        receivedAnyChunk = true;
-        onChunk(text);
-      }
-    };
-
-    eventSource.addEventListener('done', (event) => {
+    if (normalizedName === 'done') {
       try {
-        const payload = JSON.parse((event as MessageEvent).data) as { sessionId?: string; stage?: ChatResponse['stage'] };
+        const payload = JSON.parse(text) as { sessionId?: string; stage?: ChatResponse['stage'] };
         sessionId = payload.sessionId || sessionId;
         stage = payload.stage || stage;
       } catch {
         // Ignore malformed done payloads.
       }
-      finish();
-    });
+      return;
+    }
 
-    eventSource.addEventListener('error', (ev: Event) => {
-      if (finished) {
-        return;
+    if (normalizedName === 'error') {
+      const msg = text.trim() || 'Request failed';
+      throw new Error(msg);
+    }
+
+    if (text) {
+      receivedAnyChunk = true;
+      onChunk(text);
+    }
+  };
+
+  try {
+    const response = await fetch(url, withNgrokBypassHeaders(url, {
+      method: 'GET'
+    }));
+
+    handlers.onOpen?.();
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(errText || `Request failed ${response.status}`);
+    }
+
+    if (!response.body) {
+      throw new Error('Stream body is empty');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
       }
-      // If server sent a named 'error' event carrying textual data, use it.
-      try {
-        const me = ev as MessageEvent;
-        const payload = me && (me.data as string);
-        if (payload && payload.trim()) {
-          // If we already received chunks, append a short system message and finish.
-          if (receivedAnyChunk) {
-            onChunk('\n\n[系统] ' + payload);
-            finish();
-            return;
+
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split(/\r?\n\r?\n/);
+      buffer = chunks.pop() || '';
+
+      for (const chunk of chunks) {
+        if (!chunk.trim()) {
+          continue;
+        }
+
+        const lines = chunk.split(/\r?\n/);
+        let eventName = 'message';
+        const dataLines: string[] = [];
+
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            eventName = line.slice(6).trim();
+          } else if (line.startsWith('data:')) {
+            dataLines.push(line.slice(5).trimStart());
           }
-          // No chunks received yet — fail with the server-provided reason.
-          fail(new Error(payload));
-          return;
         }
-      } catch (err) {
-        // ignore
-      }
 
-      if (eventSource.readyState === EventSource.CLOSED) {
-        if (receivedAnyChunk) {
-          finish();
-          return;
-        }
-        fail(new Error('Request failed'));
+        handleSseEvent(eventName, dataLines.join('\n'));
       }
-    });
-  });
+    }
+
+    if (buffer.trim()) {
+      const lines = buffer.split(/\r?\n/);
+      let eventName = 'message';
+      const dataLines: string[] = [];
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          eventName = line.slice(6).trim();
+        } else if (line.startsWith('data:')) {
+          dataLines.push(line.slice(5).trimStart());
+        }
+      }
+      handleSseEvent(eventName, dataLines.join('\n'));
+    }
+
+    handlers.onClose?.();
+    return { sessionId, stage, receivedAnyChunk };
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error('Request failed');
+    handlers.onError?.(err);
+    handlers.onClose?.();
+    throw err;
+  }
 }
 
 export async function uploadResume(sessionId: string, file: File): Promise<{ resumeSummary?: string; missingFields?: string }> {
@@ -197,10 +235,11 @@ export async function uploadResume(sessionId: string, file: File): Promise<{ res
   fd.append('sessionId', sessionId);
   fd.append('file', file, file.name);
 
-  const resp = await fetch(`${API_BASE}/api/v1/profile/uploadResume`, {
+  const uploadUrl = `${API_BASE}/api/v1/profile/uploadResume`;
+  const resp = await fetch(uploadUrl, withNgrokBypassHeaders(uploadUrl, {
     method: 'POST',
     body: fd
-  });
+  }));
 
   if (!resp.ok) {
     const t = await resp.text();
@@ -216,7 +255,8 @@ export async function fetchConversationHistory(sessionId: string, limit = 50): P
   params.set('sessionId', sessionId || '');
   params.set('limit', String(limit));
 
-  const resp = await fetch(`${API_BASE}/api/v1/chat/history?${params.toString()}`);
+  const url = `${API_BASE}/api/v1/chat/history?${params.toString()}`;
+  const resp = await fetch(url, withNgrokBypassHeaders(url));
   if (!resp.ok) {
     const text = await resp.text();
     throw new Error(text || `history query failed ${resp.status}`);
@@ -231,7 +271,8 @@ export async function fetchConversationEvaluations(sessionId: string, limit = 20
   params.set('sessionId', sessionId || '');
   params.set('limit', String(limit));
 
-  const resp = await fetch(`${API_BASE}/api/v1/chat/evaluations?${params.toString()}`);
+  const url = `${API_BASE}/api/v1/chat/evaluations?${params.toString()}`;
+  const resp = await fetch(url, withNgrokBypassHeaders(url));
   if (!resp.ok) {
     const text = await resp.text();
     throw new Error(text || `evaluation query failed ${resp.status}`);
@@ -245,7 +286,8 @@ export async function generateConversationTitle(sessionId: string): Promise<{ se
   const params = new URLSearchParams();
   params.set('sessionId', sessionId || '');
 
-  const resp = await fetch(`${API_BASE}/api/v1/chat/session-title?${params.toString()}`);
+  const url = `${API_BASE}/api/v1/chat/session-title?${params.toString()}`;
+  const resp = await fetch(url, withNgrokBypassHeaders(url));
   if (!resp.ok) {
     const text = await resp.text();
     throw new Error(text || `title generation failed ${resp.status}`);
@@ -259,9 +301,10 @@ export async function deleteConversationSession(sessionId: string): Promise<void
   const params = new URLSearchParams();
   params.set('sessionId', sessionId || '');
 
-  const resp = await fetch(`${API_BASE}/api/v1/chat/session?${params.toString()}`, {
+  const url = `${API_BASE}/api/v1/chat/session?${params.toString()}`;
+  const resp = await fetch(url, withNgrokBypassHeaders(url, {
     method: 'DELETE'
-  });
+  }));
 
   if (!resp.ok) {
     const text = await resp.text();
