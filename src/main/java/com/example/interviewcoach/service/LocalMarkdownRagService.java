@@ -46,7 +46,13 @@ public class LocalMarkdownRagService implements RagKnowledgeService {
             return;
         }
 
-        Path root = Paths.get(properties.getKnowledgePath());
+        String knowledgePath = properties.getKnowledgePath();
+        if (knowledgePath == null || knowledgePath.isBlank()) {
+            index.set(List.of());
+            return;
+        }
+
+        Path root = Paths.get(knowledgePath);
         if (!Files.exists(root)) {
             index.set(List.of());
             return;

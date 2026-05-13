@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 public class RagProperties {
 
     private boolean enabled = true;
-    private String knowledgePath = "D:/vscode笔记/.vscode/找工作";
+    private String knowledgePath = "";
     private int topK = 3;
     private int chunkSize = 1200;
     private int minScore = 1;

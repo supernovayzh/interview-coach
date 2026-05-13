@@ -9,19 +9,23 @@ spring:
   config:
     import: optional:file:./secrets.yml
 
+app:
+  web:
+    allowed-origins: "${APP_WEB_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:5174,http://localhost:5175}"
+
 llm:
   openai:
-    # API key is loaded from secrets.yml (gitignored); keep here as placeholder
-    api-key: "${llm.openai.apiKey:}"
-    model: "glm-4.5-air"
-    # default to GLM OpenAI-compatible endpoint; override in secrets.yml if needed
-    endpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    # Prefer env vars first, then fall back to secrets.yml / other property sources.
+    api-key: "${LLM_OPENAI_API_KEY:${llm.openai.apiKey:}}"
+    model: "${LLM_OPENAI_MODEL:glm-4.5-air}"
+    # Default to GLM OpenAI-compatible endpoint; override with env or secrets.yml if needed.
+    endpoint: "${LLM_OPENAI_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/chat/completions}"
     max-tokens: 1024
     system-prompt: "你要扮演Java后端面试官，而不是替用户回答的陪练。默认目标是按面试官视角与用户进行一问一答的互动：每次只问一个具体问题，等待用户回答后再决定是追问、给建议，还是进入下一个问题。不要一次提出多个问题，不要自问自答，不要先替用户总结答案。"
 
 rag:
   enabled: true
-  knowledge-path: "D:/vscode笔记/.vscode/找工作"
+  knowledge-path: "${RAG_KNOWLEDGE_PATH:D:/vscode笔记/.vscode/找工作}"
   top-k: 3
   chunk-size: 1200
   min-score: 1

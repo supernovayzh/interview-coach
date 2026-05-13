@@ -42,4 +42,50 @@ When planner decides to use `web_search`, it can pass step arguments:
 - `topK`: number of results
 - `domains`: optional allowlist domains (e.g., `oracle.com`, `spring.io`)
 
+## LLM Judge Config
+
+The eval endpoint uses an LLM judge when an API key is available. Configure it with environment variables or `secrets.yml`:
+
+```bash
+setx LLM_OPENAI_API_KEY "your-api-key"
+setx LLM_OPENAI_MODEL "glm-4.5-air"
+setx LLM_OPENAI_ENDPOINT "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+```
+
+Or create a local `secrets.yml` with:
+
+```yaml
+llm:
+	openai:
+		api-key: "your-api-key"
+		model: "glm-4.5-air"
+		endpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+```
+
+If the key is missing, the eval still runs, but `judgeScore` stays empty and only the rule score is used.
+
+## Deployment Layout
+
+Local development and deployment now use different config layers:
+
+- Local/dev: backend uses `application-dev.yml` with SQLite, frontend uses `frontend/.env.development`
+- Production: backend uses `application-prod.yml`, frontend uses Vercel environment variables
+
+For deployment, set these backend environment variables on Render:
+
+- `JDBC_DATABASE_URL`
+- `JDBC_DATABASE_USERNAME`
+- `JDBC_DATABASE_PASSWORD`
+- `LLM_OPENAI_API_KEY`
+- `LLM_OPENAI_MODEL`
+- `LLM_OPENAI_ENDPOINT`
+- `APP_WEB_ALLOWED_ORIGINS`
+- `RAG_KNOWLEDGE_PATH`
+
+For the frontend on Vercel, set:
+
+- `VITE_API_BASE` = your Render backend URL
+
+Keep the Markdown knowledge base in a backend-readable directory or mounted volume. When it grows larger, move the retrieval index to a vector store.
+
 Next: integrate Spring AI or OpenAI client, add vector search (Milvus/PGVector), implement RAG flow.

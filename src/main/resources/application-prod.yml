@@ -6,5 +6,11 @@ spring:
     driver-class-name: org.postgresql.Driver
 
 app:
+  web:
+    allowed-origins: ${APP_WEB_ALLOWED_ORIGINS}
   persistence:
     enabled: true
+
+rag:
+  knowledge-path: ${RAG_KNOWLEDGE_PATH}
+

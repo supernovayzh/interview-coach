@@ -192,11 +192,12 @@ export async function askChatStream(
 }
 
 export async function uploadResume(sessionId: string, file: File): Promise<{ resumeSummary?: string; missingFields?: string }> {
+  const API_BASE = (import.meta.env.VITE_API_BASE as string) || '';
   const fd = new FormData();
   fd.append('sessionId', sessionId);
   fd.append('file', file, file.name);
 
-  const resp = await fetch('/api/v1/profile/uploadResume', {
+  const resp = await fetch(`${API_BASE}/api/v1/profile/uploadResume`, {
     method: 'POST',
     body: fd
   });
